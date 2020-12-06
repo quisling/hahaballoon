@@ -20,6 +20,7 @@ bool internetOk = false;
 void gpsdump(TinyGPS &gps);
 void printFloat(double f, int digits = 2);
 
+void printStartup();
 void doGetRequestTest(String server, String port, String message, String protocol = "TCP");
 String doGsmCommand(String cmd, int timeout = 1000);
 void sendToThingSpeak();
@@ -59,20 +60,8 @@ void setup()
   doPassthrouhg();
   String CP;
   //setupGprs();
-  //CP=doGsmCommand("AT+CIFSR",1000);
+  printStartup();
   CP=doGsmCommand("AT+CGREG?");
-  delay(1000);  
-  Serial.println(doGsmCommand("AT+CGATT?")); //Check GPRS attachment
-  delay(1000);
- 
-  Serial.println(doGsmCommand("AT+CIPSHUT")); //close the GPRS PDP context.
-  delay(1000);
- 
-  Serial.println(doGsmCommand("AT+CIPSTATUS")); //returns the current connection status. This command returns the applicable server status, client status, conenction number (for multi-ip) and GPRS bearer info.
-  delay(2000);
- 
-  Serial.println(doGsmCommand("AT+CIPMUX=0"));
-  delay(2000);
   if(CP.indexOf("OK" ))//CP.length() != 27)
   {
     Serial.println("CP_Ok="+CP);
@@ -80,18 +69,20 @@ void setup()
     internetOk = true;
   }
   else
+  {
+    Serial.println("NOT GOOD PLACE");
     internetOk = false;
     Serial.println("CP="+CP + " CP_length= " +CP.length());
+  }
 }
 
 void loop() // run over and over
 {
- //doGsmTransfer();
+ Serial.println("ACTION TIME!!");
  if( internetOk)
  {
   //doGetRequestTest("luminare.se","5555", "GET Hejtomtegubbar HTTP/1.0"); // Christian test server
-  doGetRequestTest("api.thingspeak.com","80", "GET api.thingspeak.com/update?api_key=9N13CC4IWEVHIBLL&field1=1337\r\n\r\n");  
-  //sendToThingSpeak();
+  //doGetRequestTest("asksensors.com","80", "GET http://asksensors.com/api.asksensors/write/uGwRYe9At5EKDib5QoIgqBPk6x9C7gIk?module1=loltest HTTP/1.1\r\nHost: asksensors.com\r\nConnection: close\r\n\r\n");
  }
  else
  {
@@ -160,13 +151,14 @@ void setupGprs()
   reportString = doGsmCommand("AT+CIPSPRT=1"); //activates echo >
   Serial.println("Prompt set" + reportString);
   delay(10000);
+  Serial.println("SETUP DONE!!");
 }
 
 void doGetRequestTest(String server, String port, String message, String protocol)
 {
   String reportString;
-
   reportString = doGsmCommand("AT+CIPSTART=\"" + protocol + "\",\"" + server + "\",\"" + port + "\"");//start up the connection
+  
   Serial.println("Prompt set" + reportString);
   delay(1000);
   
@@ -182,42 +174,20 @@ void doGetRequestTest(String server, String port, String message, String protoco
   delay(1000);
 }
 
-
-void sendToThingSpeak()
-{
-  String reportString;
-  int time = millis();
-
-  //String str="GET https://api.thingspeak.com/update?api_key=9N13CC4IWEVHIBLL&field1=1337 HTTP/1.0";// + (String) millis();
-  
- // Serial.println("The string is: " + str);
- // Serial.println(str.length());
-  
-  delay(3000);
-
-  reportString = doGsmCommand("AT+CIPSTART=\"TCP\",\"api.thingspeak.com\",\"80\"");//start up the connection
-  Serial.println("Prompt set" + reportString);
+void printStartup()
+{  
+  Serial.println(doGsmCommand("AT+CGATT?")); //Check GPRS attachment
   delay(1000);
-
-  reportString = doGsmCommand("AT+CIPSEND=87");// + str.length());//begin send data to remote server
-  Serial.println("Begin send data: " + reportString);
-  delay(4000);
-
-  
-  //Serial.println("Adding string" + str + (String)((char)26));
- // reportString = doGsmCommand(str + (String)((char)26));//begin send data to remote server
-  Serial.println("Sending string response: " + reportString);
-  delay(4000);
-  
-  reportString = doGsmCommand("AT+CIPACK");//ask for acknowledge details
-  Serial.println("Ask for Ack "+ reportString);
-
-  //reportString = doGsmCommand("AT+CIPSHUT");//close the connection
-  //Serial.println("Connection Closed" + reportString);
-  //delay(100);
-
-} 
-
+ 
+  Serial.println(doGsmCommand("AT+CIPSHUT")); //close the GPRS PDP context.
+  delay(1000);
+ 
+  Serial.println(doGsmCommand("AT+CIPSTATUS")); //returns the current connection status. This command returns the applicable server status, client status, conenction number (for multi-ip) and GPRS bearer info.
+  delay(2000);
+ 
+  Serial.println(doGsmCommand("AT+CIPMUX=0"));
+  delay(2000);
+}
 
 void printPower()
 {
@@ -238,12 +208,13 @@ String doGsmCommand(String cmd, int timeout = 1000)
   for(;;)
   {
     delay(150);
+    unsigned long timeNow = millis();
     response = gsmInterface.readString();
     if(response.indexOf("OK") != -1)
       break;
     if(response.length() > 3)
       return response;
-    if((time + timeout ) > millis())
+    if((time + timeout ) > timeNow)
       return "TIMEOUT";
     Serial.println("Data on interface: '" + response + "'");
   }
