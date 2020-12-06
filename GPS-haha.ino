@@ -20,6 +20,7 @@ bool internetOk = false;
 void gpsdump(TinyGPS &gps);
 void printFloat(double f, int digits = 2);
 
+void doGetRequestTest(String server, String port, String message, String protocol = "TCP");
 String doGsmCommand(String cmd, int timeout = 1000);
 void sendToThingSpeak();
 int openTcp(String adress, String port);
@@ -61,13 +62,13 @@ void setup()
   //CP=doGsmCommand("AT+CIFSR",1000);
   CP=doGsmCommand("AT+CGREG?");
   delay(1000);  
-  Serial.println(doGsmCommand("AT+CGATT?"));
+  Serial.println(doGsmCommand("AT+CGATT?")); //Check GPRS attachment
   delay(1000);
  
-  Serial.println(doGsmCommand("AT+CIPSHUT"));
+  Serial.println(doGsmCommand("AT+CIPSHUT")); //close the GPRS PDP context.
   delay(1000);
  
-  Serial.println(doGsmCommand("AT+CIPSTATUS"));
+  Serial.println(doGsmCommand("AT+CIPSTATUS")); //returns the current connection status. This command returns the applicable server status, client status, conenction number (for multi-ip) and GPRS bearer info.
   delay(2000);
  
   Serial.println(doGsmCommand("AT+CIPMUX=0"));
@@ -88,7 +89,9 @@ void loop() // run over and over
  //doGsmTransfer();
  if( internetOk)
  {
-  sendToThingSpeak();
+  //doGetRequestTest("luminare.se","5555", "GET Hejtomtegubbar HTTP/1.0"); // Christian test server
+  doGetRequestTest("api.thingspeak.com","80", "GET api.thingspeak.com/update?api_key=9N13CC4IWEVHIBLL&field1=1337\r\n\r\n");  
+  //sendToThingSpeak();
  }
  else
  {
@@ -159,7 +162,25 @@ void setupGprs()
   delay(10000);
 }
 
+void doGetRequestTest(String server, String port, String message, String protocol)
+{
+  String reportString;
 
+  reportString = doGsmCommand("AT+CIPSTART=\"" + protocol + "\",\"" + server + "\",\"" + port + "\"");//start up the connection
+  Serial.println("Prompt set" + reportString);
+  delay(1000);
+  
+  reportString = doGsmCommand("AT+CIPSEND=" + (String)(message.length()));//begin send data to remote server
+  Serial.println("Begin send data: " + reportString);
+  reportString = doGsmCommand(message + (String)((char)26));
+  Serial.println("sent all data: " + reportString);
+  delay(5000);
+  reportString = doGsmCommand("AT+CIPACK");//ask for acknowledge details
+  Serial.println("Ask for Ack "+ reportString);
+  reportString = doGsmCommand("AT+CIPCLOSE");//begin send data to remote server
+  Serial.println("Closing connection: " + reportString);
+  delay(1000);
+}
 
 
 void sendToThingSpeak()
@@ -167,8 +188,10 @@ void sendToThingSpeak()
   String reportString;
   int time = millis();
 
-  String str="GET https://api.thingspeak.com/update?api_key=9N13CC4IWEVHIBLL&field1=" + String(time);
-  Serial.println(str.length());
+  //String str="GET https://api.thingspeak.com/update?api_key=9N13CC4IWEVHIBLL&field1=1337 HTTP/1.0";// + (String) millis();
+  
+ // Serial.println("The string is: " + str);
+ // Serial.println(str.length());
   
   delay(3000);
 
@@ -176,26 +199,22 @@ void sendToThingSpeak()
   Serial.println("Prompt set" + reportString);
   delay(1000);
 
-  reportString = doGsmCommand("AT+CIPSEND=" + str.length());//begin send data to remote server
+  reportString = doGsmCommand("AT+CIPSEND=87");// + str.length());//begin send data to remote server
   Serial.println("Begin send data: " + reportString);
   delay(4000);
-  
-  
-  Serial.println("Adding string" + str);
-  reportString = doGsmCommand(str);//begin send data to remote server
-  Serial.println("Add response" + reportString);
-  delay(4000);
 
-  reportString = doGsmCommand((char)26);//sending
-  Serial.println("Sending" + reportString);
-  delay(5000);//waiting for reply, important! the time is base on the condition of internet 
+  
+  //Serial.println("Adding string" + str + (String)((char)26));
+ // reportString = doGsmCommand(str + (String)((char)26));//begin send data to remote server
+  Serial.println("Sending string response: " + reportString);
+  delay(4000);
   
   reportString = doGsmCommand("AT+CIPACK");//ask for acknowledge details
   Serial.println("Ask for Ack "+ reportString);
 
-  reportString = doGsmCommand("AT+CIPSHUT");//close the connection
-  Serial.println("Connection Closed" + reportString);
-  delay(100);
+  //reportString = doGsmCommand("AT+CIPSHUT");//close the connection
+  //Serial.println("Connection Closed" + reportString);
+  //delay(100);
 
 } 
 
@@ -229,151 +248,4 @@ String doGsmCommand(String cmd, int timeout = 1000)
     Serial.println("Data on interface: '" + response + "'");
   }
   return response;
-}
-
-
-void sendText()
-{
-//Set SMS format to ASCII
-  gsmInterface.println("AT+CMGF=1\r\n");
-  delay(1000);
-  Serial.println(gsmInterface.read());
-  //Send new SMS command and message number
-  gsmInterface.println("AT+CMGS=\"+46707959528\"\r\n");
-  delay(1000);
-  Serial.println(gsmInterface.read());
-  //Send SMS content
-  gsmInterface.println("This is balloon speaking\r\n");
-  delay(50);
-  //gsmInterface.write(String(millis()/1000).toCharArray());
-  delay(1000);
-   
-  //Send Ctrl+Z / ESC to denote SMS message is complete
-  gsmInterface.write((char)26);
-  delay(1000);
-  Serial.println(gsmInterface.read());
-  Serial.println("SMS Sent!");
-}
-
-void readGPS()
-{
-  bool newdata = false;
-  unsigned long start = millis();
-  // Every 5 seconds we print an update
-  while (millis() - start < 5000) 
-  {
-    if (gpsInterface.available()) 
-    
-    {
-      char c = gpsInterface.read();
-      if (gps.encode(c)) 
-      {
-        newdata = true;
-        break;  // uncomment to print new data immediately!
-      }else{
-        Serial.print(c);  // uncomment to see raw GPS data
-      }
-    }
-  }
-  
-  if (newdata) 
-  {
-    Serial.println("Acquired Data");
-    Serial.println("-------------");
-    gpsdump(gps);
-    Serial.println("-------------");
-    Serial.println();
-  }
-}
-
-void gpsdump(TinyGPS &gps)
-{
-  long lat, lon;
-  float flat, flon;
-  unsigned long age, date, time, chars;
-  int year;
-  byte month, day, hour, minute, second, hundredths;
-  unsigned short sentences, failed;
-
-  gps.get_position(&lat, &lon, &age);
-  Serial.print("Lat/Long(10^-5 deg): "); Serial.print(lat); Serial.print(", "); Serial.print(lon); 
-  Serial.print(" Fix age: "); Serial.print(age); Serial.println("ms.");
-  
-  // On Arduino, GPS characters may be lost during lengthy Serial.print()
-  // On Teensy, Serial prints to USB, which has large output buffering and
-  //   runs very fast, so it's not necessary to worry about missing 4800
-  //   baud GPS characters.
-
-  gps.f_get_position(&flat, &flon, &age);
-  Serial.print("Lat/Long(float): "); printFloat(flat, 5); Serial.print(", "); printFloat(flon, 5);
-    Serial.print(" Fix age: "); Serial.print(age); Serial.println("ms.");
-
-  gps.get_datetime(&date, &time, &age);
-  Serial.print("Date(ddmmyy): "); Serial.print(date); Serial.print(" Time(hhmmsscc): ");
-    Serial.print(time);
-  Serial.print(" Fix age: "); Serial.print(age); Serial.println("ms.");
-
-  gps.crack_datetime(&year, &month, &day, &hour, &minute, &second, &hundredths, &age);
-  Serial.print("Date: "); Serial.print(static_cast<int>(month)); Serial.print("/"); 
-    Serial.print(static_cast<int>(day)); Serial.print("/"); Serial.print(year);
-  Serial.print("  Time: "); Serial.print(static_cast<int>(hour+8));  Serial.print(":"); //Serial.print("UTC +08:00 Malaysia");
-    Serial.print(static_cast<int>(minute)); Serial.print(":"); Serial.print(static_cast<int>(second));
-    Serial.print("."); Serial.print(static_cast<int>(hundredths)); Serial.print(" UTC +08:00 Malaysia");
-  Serial.print("  Fix age: ");  Serial.print(age); Serial.println("ms.");
-
-  Serial.print("Alt(cm): "); Serial.print(gps.altitude()); Serial.print(" Course(10^-2 deg): ");
-    Serial.print(gps.course()); Serial.print(" Speed(10^-2 knots): "); Serial.println(gps.speed());
-  Serial.print("Alt(float): "); printFloat(gps.f_altitude()); Serial.print(" Course(float): ");
-    printFloat(gps.f_course()); Serial.println();
-  Serial.print("Speed(knots): "); printFloat(gps.f_speed_knots()); Serial.print(" (mph): ");
-    printFloat(gps.f_speed_mph());
-  Serial.print(" (mps): "); printFloat(gps.f_speed_mps()); Serial.print(" (kmph): ");
-    printFloat(gps.f_speed_kmph()); Serial.println();
-
-  gps.stats(&chars, &sentences, &failed);
-  Serial.print("Stats: characters: "); Serial.print(chars); Serial.print(" sentences: ");
-    Serial.print(sentences); Serial.print(" failed checksum: "); Serial.println(failed);
-}
-
-void printFloat(double number, int digits)
-{
-  // Handle negative numbers
-  if (number < 0.0) 
-  {
-     Serial.print('-');
-     number = -number;
-  }
-
-  // Round correctly so that print(1.999, 2) prints as "2.00"
-  double rounding = 0.5;
-  for (uint8_t i=0; i<digits; ++i)
-    rounding /= 10.0;
-  
-  number += rounding;
-
-  // Extract the integer part of the number and print it
-  unsigned long int_part = (unsigned long)number;
-  double remainder = number - (double)int_part;
-  Serial.print(int_part);
-
-  // Print the decimal point, but only if there are digits beyond
-  if (digits > 0)
-    Serial.print("."); 
-
-  // Extract digits from the remainder one at a time
-  while (digits-- > 0) 
-  {
-    remainder *= 10.0;
-    int toPrint = int(remainder);
-    Serial.print(toPrint);
-    remainder -= toPrint;
-  }
-}
-
-int openTcp(String adress, String port)
-{
-  //String tcpOpen()
-  //gsmInterface.println("AT+CIPSTART=\"TCP\",\""+adress+"\",\""+port+"\"");
-  //delay(150);
-  return 0;
 }
