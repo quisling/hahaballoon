@@ -5,81 +5,256 @@
 
 #include <SoftwareSerial.h>
 #include <TinyGPS.h>
+#include <string.h>
 
 String Arsp, Grsp;
-SoftwareSerial gsmInterface(6, 7); // RX, TX
+SoftwareSerial gsmInterface(7, 6); // RX, TX
 SoftwareSerial gpsInterface(10, 11);
 TinyGPS gps;
 
+String APN_NAME = "\"services.telenor.se\",";
+String APN_PIN  = "\"\",";
+String APN_PASS = "\"\"";
+
+bool internetOk = false;
 void gpsdump(TinyGPS &gps);
 void printFloat(double f, int digits = 2);
 
+String doGsmCommand(String cmd, int timeout = 1000);
+void sendToThingSpeak();
+int openTcp(String adress, String port);
+int sendTcpString(String data,int terminate);
+int sendTcpByte(char byte, int terminate);
+int closeTcp();
+
+using namespace::std;
+
+void doPassthrouhg()
+{
+  //#define PASSTHROUGH
+
+  #ifdef PASSTHROUGH
+  Serial.println("START:");
+  for(;;)
+  {
+    if (Serial.available()) {      // If anything comes in Serial (USB),
+      gsmInterface.write(Serial.read());   // read it and send it out Serial1 (pins 0 & 1)
+    }
+
+    if (gsmInterface.available()) {     // If anything comes in Serial1 (pins 0 & 1)
+      Serial.write(gsmInterface.read());   // read it and send it out Serial (USB)
+    }
+  }
+  #endif
+}
+
 void setup()  
 {
-  // Oploen serial communications and wait for port to open:
+  // Open serial communications and wait for port to open:
   Serial.begin(9600);
-  // set the data rate for the SoftwareSerial port
-  gpsInterface.begin(9600);
   gsmInterface.begin(9600);
+  Serial.println("start stuff");
+  delay(20000);
+  doPassthrouhg();
+  String CP;
+  //setupGprs();
+  //CP=doGsmCommand("AT+CIFSR",1000);
+  CP=doGsmCommand("AT+CGREG?");
+  delay(1000);  
+  Serial.println(doGsmCommand("AT+CGATT?"));
   delay(1000);
-  Serial.println("uBlox Neo 6M");
-  Serial.print("Testing TinyGPS library v. "); Serial.println(TinyGPS::library_version());
-  Serial.println("by Mikal Hart");
-  Serial.println();
-  Serial.print("Sizeof(gpsobject) = "); 
-  Serial.println(sizeof(TinyGPS));
-  Serial.println("is it working´?");
-  Serial.println(); 
+ 
+  Serial.println(doGsmCommand("AT+CIPSHUT"));
+  delay(1000);
+ 
+  Serial.println(doGsmCommand("AT+CIPSTATUS"));
+  delay(2000);
+ 
+  Serial.println(doGsmCommand("AT+CIPMUX=0"));
+  delay(2000);
+  if(CP.indexOf("OK" ))//CP.length() != 27)
+  {
+    Serial.println("CP_Ok="+CP);
+    setupGprs();
+    internetOk = true;
+  }
+  else
+    internetOk = false;
+    Serial.println("CP="+CP + " CP_length= " +CP.length());
 }
 
 void loop() // run over and over
 {
- gpsInterface.listen();
- readGPS();
- gsmInterface.listen();
- doGsmTransfer();
- Serial.println("Skickar meddelande");
- //sendText();
- delay(50000);
+ //doGsmTransfer();
+ if( internetOk)
+ {
+  sendToThingSpeak();
+ }
+ else
+ {
+  Serial.println("Serial Not Ok");
+ }
+ delay(10000);
 }
 
-void doGsmTransfer()
+void setupGprs()
 {
-  gsmInterface.write("AT\r\n");
-  Serial.write(gsmInterface.read());
-  for(int i = 0; i<10; i++){
-    if(gsmInterface.available())
-    {
-      Serial.println("gsm stuff");
-      Grsp = gsmInterface.readString();
-      Serial.println(Grsp);
-      break;  
-    }
-    delay(1000);
-    Serial.print("Doing round: ");
-    Serial.println(i);
+
+  Serial.println("Waiting for GSM module to be ready...");
+  String reportString = "";
+  for(;;)
+  {
+    reportString = doGsmCommand("AT");
+    if(reportString.indexOf("OK") != -1)
+      break;
+      
+    if(reportString.indexOf("TIMEOUT") != -1)
+      Serial.println("Modem did not respond\n");
+
+    delay(250);
   }
+
+  printPower();
+  
+  reportString = doGsmCommand("ATI");
+  Serial.println("Module:" + reportString );
+
+  Serial.println("Enable all features...");
+
+  while ((reportString = doGsmCommand("AT+CFUN=1", 2000)).indexOf("OK") == -1 )
+  {
+    Serial.println("Try again, enable all features... \nLast response was:\n" + reportString);    
+    delay(2000);
+    Serial.println("Features = " + reportString);
+  }
+  
+  Serial.println("Check that SIM is ready for GPRS ");
+  while ((reportString = doGsmCommand("AT+CPIN?", 1000)).indexOf("OK") == -1)
+  {
+    Serial.println("Still waiting for SIM to be ready for GPRS... \nLast response was:\n" + reportString);   
+
+     delay(2000);
+  }
+  Serial.println("Response from SIM ready is: "+ reportString);
+  Serial.println("Enable extended result code reporting\n");
+  reportString = doGsmCommand("AT+CMEE=1");
+  //Serial.println("Response was " + reportString);
+
+  Serial.println("Set APN to: " + APN_NAME + APN_PIN + APN_PASS + "\n");
+  reportString = doGsmCommand("AT+CSTT=" + APN_NAME + APN_PIN + APN_PASS); //  AT+CSTT="services.telenor.se","",""
+  //Serial.println("Response was " + reportString);
+  delay(2000);
+  Serial.println("Start GPRS connection");
+  while((reportString = doGsmCommand("AT+CIICR")).indexOf("OK" )== -1) //Starting GPRS connection
+  {
+    Serial.println("Failed to establish GPRS session\n");
+    Serial.println(reportString+"\n");
+    delay(3000);
+  }
+  
+  reportString = doGsmCommand("AT+CIFSR");
+  Serial.println("Obtained IP: " + reportString);
+  reportString = doGsmCommand("AT+CIPSPRT=1"); //activates echo >
+  Serial.println("Prompt set" + reportString);
+  delay(10000);
 }
+
+
+
+
+void sendToThingSpeak()
+{
+  String reportString;
+  int time = millis();
+
+  String str="GET https://api.thingspeak.com/update?api_key=9N13CC4IWEVHIBLL&field1=" + String(time);
+  Serial.println(str.length());
+  
+  delay(3000);
+
+  reportString = doGsmCommand("AT+CIPSTART=\"TCP\",\"api.thingspeak.com\",\"80\"");//start up the connection
+  Serial.println("Prompt set" + reportString);
+  delay(1000);
+
+  reportString = doGsmCommand("AT+CIPSEND=" + str.length());//begin send data to remote server
+  Serial.println("Begin send data: " + reportString);
+  delay(4000);
+  
+  
+  Serial.println("Adding string" + str);
+  reportString = doGsmCommand(str);//begin send data to remote server
+  Serial.println("Add response" + reportString);
+  delay(4000);
+
+  reportString = doGsmCommand((char)26);//sending
+  Serial.println("Sending" + reportString);
+  delay(5000);//waiting for reply, important! the time is base on the condition of internet 
+  
+  reportString = doGsmCommand("AT+CIPACK");//ask for acknowledge details
+  Serial.println("Ask for Ack "+ reportString);
+
+  reportString = doGsmCommand("AT+CIPSHUT");//close the connection
+  Serial.println("Connection Closed" + reportString);
+  delay(100);
+
+} 
+
+
+void printPower()
+{
+  Serial.println("Check power\n");
+  String reportString = doGsmCommand("AT+CBC");
+ delay(1000);
+  Serial.println("Response was " + reportString);
+}
+
+String doGsmCommand(String cmd, int timeout = 1000)
+{
+  unsigned long time = millis();
+  Serial.println("SEND: "+cmd);
+  gsmInterface.println(cmd+"\r\n");
+  String response = "";
+  delay(10);
+
+  for(;;)
+  {
+    delay(150);
+    response = gsmInterface.readString();
+    if(response.indexOf("OK") != -1)
+      break;
+    if(response.length() > 3)
+      return response;
+    if((time + timeout ) > millis())
+      return "TIMEOUT";
+    Serial.println("Data on interface: '" + response + "'");
+  }
+  return response;
+}
+
+
 void sendText()
 {
 //Set SMS format to ASCII
-  gsmInterface.write("AT+CMGF=1\r\n");
+  gsmInterface.println("AT+CMGF=1\r\n");
   delay(1000);
- 
+  Serial.println(gsmInterface.read());
   //Send new SMS command and message number
-  gsmInterface.write("AT+CMGS=\"+46709686176\"\r\n");
+  gsmInterface.println("AT+CMGS=\"+46707959528\"\r\n");
   delay(1000);
-   
+  Serial.println(gsmInterface.read());
   //Send SMS content
-  gsmInterface.write("This is balloon speaking");
+  gsmInterface.println("This is balloon speaking\r\n");
+  delay(50);
+  //gsmInterface.write(String(millis()/1000).toCharArray());
   delay(1000);
    
   //Send Ctrl+Z / ESC to denote SMS message is complete
   gsmInterface.write((char)26);
   delay(1000);
-     
+  Serial.println(gsmInterface.read());
   Serial.println("SMS Sent!");
 }
+
 void readGPS()
 {
   bool newdata = false;
@@ -193,4 +368,12 @@ void printFloat(double number, int digits)
     Serial.print(toPrint);
     remainder -= toPrint;
   }
+}
+
+int openTcp(String adress, String port)
+{
+  //String tcpOpen()
+  //gsmInterface.println("AT+CIPSTART=\"TCP\",\""+adress+"\",\""+port+"\"");
+  //delay(150);
+  return 0;
 }
