@@ -8,9 +8,9 @@ const char simPIN[]   = "";
 
 // Server details
 // The server variable can be just a domain name or it can have a subdomain. It depends on the service you are using
-const char server[] = "luminare.se"; // domain name: example.com, maker.ifttt.com, etc
+const char server[] = "thingspeak.com"; // domain name: example.com, maker.ifttt.com, etc
 const char resource[] = "";         // resource path, for example: /post-data.php
-const int  port = 5555;                             // server port number
+const int  port = 80;                             // server port number
 
 // Keep this API Key value to be compatible with the PHP code provided in the project page. 
 // If you change the apiKeyValue value, the PHP file /post-data.php also needs to have the same key 
@@ -146,10 +146,12 @@ void loop() {
       SerialMon.println(millis());
     
       // Making an HTTP POST request
-      SerialMon.println("Performing HTTP POST request...");
+      SerialMon.println("Performing HTTP GET request...");
       // Prepare your HTTP POST request data (Temperature in Celsius degrees)
-      String httpRequestData = "api_key=" + apiKeyValue + "&value1=" + String("Hejtomtegubbar")//bme.readTemperature())
-                             + "&value2=" + String("Sla i glasen" ) + "&value3=" + String( "och lat us lustiga vara" ) + "";
+      String httpRequestData = "GET https://api.thingspeak.com/update?api_key=9N13CC4IWEVHIBLL&field1=" + String(millis());
+      
+      /*String httpRequestData = "api_key=" + apiKeyValue + "&value1=" + String("Hejtomtegubbar")//bme.readTemperature())
+                             + "&value2=" + String("Sla i glasen" ) + "&value3=" + String( "och lat us lustiga vara" ) + "";*/
       // Prepare your HTTP POST request data (Temperature in Fahrenheit degrees)
       //String httpRequestData = "api_key=" + apiKeyValue + "&value1=" + String(1.8 * bme.readTemperature() + 32)
       //                       + "&value2=" + String(bme.readHumidity()) + "&value3=" + String(bme.readPressure()/100.0F) + "";
@@ -158,7 +160,7 @@ void loop() {
       // then, use the httpRequestData variable below (for testing purposes without the BME280 sensor)
       //String httpRequestData = "api_key=tPmAT5Ab3j7F9&value1=24.75&value2=49.54&value3=1005.14";
     
-      client.print(String("POST ") + resource + " HTTP/1.1\r\n");
+      client.print(String("GET ") + resource + " HTTP/1.1\r\n");
       client.print(String("Host: ") + server + "\r\n");
       client.println("Connection: close");
       client.println("Content-Type: application/x-www-form-urlencoded");
@@ -185,6 +187,7 @@ void loop() {
       SerialMon.println(F("GPRS disconnected"));
     }
   }
+  delay(2000);
   // Put ESP32 into deep sleep mode (with timer wake up)
   //esp_deep_sleep_start();
 }
