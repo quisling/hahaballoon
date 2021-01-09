@@ -9,12 +9,12 @@ const char simPIN[]   = "";
 // Server details
 // The server variable can be just a domain name or it can have a subdomain. It depends on the service you are using
 const char server[] = "thingspeak.com"; // domain name: example.com, maker.ifttt.com, etc
-const char resource[] = "";         // resource path, for example: /post-data.php
+const char resource[] = "update?";         // resource path, for example: /post-data.php
 const int  port = 80;                             // server port number
 
 // Keep this API Key value to be compatible with the PHP code provided in the project page. 
 // If you change the apiKeyValue value, the PHP file /post-data.php also needs to have the same key 
-String apiKeyValue = "tPmAT5Ab3j7F9";
+String apiKeyValue = "";
 
 // TTGO T-Call pins
 #define MODEM_RST            5
@@ -27,6 +27,9 @@ String apiKeyValue = "tPmAT5Ab3j7F9";
 // BME280 pins
 #define I2C_SDA_2            18
 #define I2C_SCL_2            19
+// UBLOX GPS pins
+#define GPS_TX               32
+#define GPS_RX               33
 
 // Set serial for debug console (to Serial Monitor, default speed 115200)
 #define SerialMon Serial
@@ -51,6 +54,7 @@ String apiKeyValue = "tPmAT5Ab3j7F9";
   TinyGsm modem(SerialAT);
 #endif
 
+//------Barometer config-------
 //#include <Adafruit_Sensor.h>
 //#include <Adafruit_BME280.h>
 
@@ -61,9 +65,20 @@ TwoWire I2CPower = TwoWire(0);
 TwoWire I2CBME = TwoWire(1);
 //Adafruit_BME280 bme; 
 
+
+//-------GPS config-----
+#include <TinyGPS.h>
+#include <SoftwareSerial.h>
+//HardwareSerial serialGPS(2);
+//serialGPS.begin(9600, SERIAL_8N1, 32, 33);
+SoftwareSerial gpsInterface(32, 33);
+TinyGPS gps;
+
 // TinyGSM Client for Internet connection
 TinyGsmClient client(modem);
 
+
+//-------ESP32 power save configuration------
 #define uS_TO_S_FACTOR 1000000     /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP  3600        /* Time ESP32 will go to sleep (in seconds) 3600 seconds = 1 hour */
 
@@ -81,9 +96,13 @@ bool setPowerBoostKeepOn(int en){
   return I2CPower.endTransmission() == 0;
 }
 
+void gpsdump(TinyGPS &gps);
+void printFloat(double f, int digits = 2);
+
 void setup() {
   // Set serial monitor debugging window baud rate to 115200
   SerialMon.begin(115200);
+  gpsInterface.begin(9600);
 
   // Start I2C communication
   I2CPower.begin(I2C_SDA, I2C_SCL, 400000);
@@ -145,29 +164,13 @@ void loop() {
       SerialMon.println(" OK");
       SerialMon.println(millis());
     
-      // Making an HTTP POST request
+      // Making an HTTP GET request
       SerialMon.println("Performing HTTP GET request...");
-      // Prepare your HTTP POST request data (Temperature in Celsius degrees)
-      String httpRequestData = "GET https://api.thingspeak.com/update?api_key=9N13CC4IWEVHIBLL&field1=" + String(millis());
-      
-      /*String httpRequestData = "api_key=" + apiKeyValue + "&value1=" + String("Hejtomtegubbar")//bme.readTemperature())
-                             + "&value2=" + String("Sla i glasen" ) + "&value3=" + String( "och lat us lustiga vara" ) + "";*/
-      // Prepare your HTTP POST request data (Temperature in Fahrenheit degrees)
-      //String httpRequestData = "api_key=" + apiKeyValue + "&value1=" + String(1.8 * bme.readTemperature() + 32)
-      //                       + "&value2=" + String(bme.readHumidity()) + "&value3=" + String(bme.readPressure()/100.0F) + "";
-          
-      // You can comment the httpRequestData variable above
-      // then, use the httpRequestData variable below (for testing purposes without the BME280 sensor)
-      //String httpRequestData = "api_key=tPmAT5Ab3j7F9&value1=24.75&value2=49.54&value3=1005.14";
-    
-      client.print(String("GET ") + resource + " HTTP/1.1\r\n");
-      client.print(String("Host: ") + server + "\r\n");
-      client.println("Connection: close");
-      client.println("Content-Type: application/x-www-form-urlencoded");
-      client.print("Content-Length: ");
-      client.println(httpRequestData.length());
-      client.println();
+      String httpRequestData = "GET https://api.thingspeak.com/update.json?api_key=9N13CC4IWEVHIBLL&field1=" + String(millis()) + String(" HTTP/1.0");
       client.println(httpRequestData);
+      client.println();
+      client.println();
+      client.println();
 
       unsigned long timeout = millis();
       while (client.connected() && millis() - timeout < 10000L) {
@@ -188,6 +191,124 @@ void loop() {
     }
   }
   delay(2000);
+
+  readGPS();
   // Put ESP32 into deep sleep mode (with timer wake up)
   //esp_deep_sleep_start();
+}
+
+
+void readGPS()
+{
+  bool newdata = false;
+  unsigned long start = millis();
+  // Every 5 seconds we print an update
+  while (millis() - start < 5000) 
+  {
+    if (gpsInterface.available()) 
+
+    {
+      char c = gpsInterface.read();
+      if (gps.encode(c)) 
+      {
+        newdata = true;
+        break;  // uncomment to print new data immediately!
+      }else{
+        SerialMon.print(c);  // uncomment to see raw GPS data
+      }
+    }
+  }
+
+  if (newdata) 
+  {
+    SerialMon.println("Acquired Data");
+    SerialMon.println("-------------");
+    gpsdump(gps);
+    SerialMon.println("-------------");
+    SerialMon.println();
+  }
+}
+
+void gpsdump(TinyGPS &gps)
+{
+  long lat, lon;
+  float flat, flon;
+  unsigned long age, date, time, chars;
+  int year;
+  byte month, day, hour, minute, second, hundredths;
+  unsigned short sentences, failed;
+
+  gps.get_position(&lat, &lon, &age);
+  SerialMon.print("Lat/Long(10^-5 deg): "); SerialMon.print(lat); SerialMon.print(", "); SerialMon.print(lon); 
+  SerialMon.print(" Fix age: "); SerialMon.print(age); SerialMon.println("ms.");
+
+  // On Arduino, GPS characters may be lost during lengthy SerialMon.print()
+  // On Teensy, SerialMon prints to USB, which has large output buffering and
+  //   runs very fast, so it's not necessary to worry about missing 4800
+  //   baud GPS characters.
+
+  gps.f_get_position(&flat, &flon, &age);
+  SerialMon.print("Lat/Long(float): "); printFloat(flat, 5); SerialMon.print(", "); printFloat(flon, 5);
+    SerialMon.print(" Fix age: "); SerialMon.print(age); SerialMon.println("ms.");
+
+  gps.get_datetime(&date, &time, &age);
+  SerialMon.print("Date(ddmmyy): "); SerialMon.print(date); SerialMon.print(" Time(hhmmsscc): ");
+    SerialMon.print(time);
+  SerialMon.print(" Fix age: "); SerialMon.print(age); SerialMon.println("ms.");
+
+  gps.crack_datetime(&year, &month, &day, &hour, &minute, &second, &hundredths, &age);
+  SerialMon.print("Date: "); SerialMon.print(static_cast<int>(month)); SerialMon.print("/"); 
+    SerialMon.print(static_cast<int>(day)); SerialMon.print("/"); SerialMon.print(year);
+  SerialMon.print("  Time: "); SerialMon.print(static_cast<int>(hour+8));  SerialMon.print(":"); //SerialMon.print("UTC +08:00 Malaysia");
+    SerialMon.print(static_cast<int>(minute)); SerialMon.print(":"); SerialMon.print(static_cast<int>(second));
+    SerialMon.print("."); SerialMon.print(static_cast<int>(hundredths)); SerialMon.print(" UTC +08:00 Malaysia");
+  SerialMon.print("  Fix age: ");  SerialMon.print(age); SerialMon.println("ms.");
+
+  SerialMon.print("Alt(cm): "); SerialMon.print(gps.altitude()); SerialMon.print(" Course(10^-2 deg): ");
+    SerialMon.print(gps.course()); SerialMon.print(" Speed(10^-2 knots): "); SerialMon.println(gps.speed());
+  SerialMon.print("Alt(float): "); printFloat(gps.f_altitude()); SerialMon.print(" Course(float): ");
+    printFloat(gps.f_course()); SerialMon.println();
+  SerialMon.print("Speed(knots): "); printFloat(gps.f_speed_knots()); SerialMon.print(" (mph): ");
+    printFloat(gps.f_speed_mph());
+  SerialMon.print(" (mps): "); printFloat(gps.f_speed_mps()); SerialMon.print(" (kmph): ");
+    printFloat(gps.f_speed_kmph()); SerialMon.println();
+
+  gps.stats(&chars, &sentences, &failed);
+  SerialMon.print("Stats: characters: "); SerialMon.print(chars); SerialMon.print(" sentences: ");
+    SerialMon.print(sentences); SerialMon.print(" failed checksum: "); SerialMon.println(failed);
+}
+
+void printFloat(double number, int digits)
+{
+  // Handle negative numbers
+  if (number < 0.0) 
+  {
+     SerialMon.print('-');
+     number = -number;
+  }
+
+  // Round correctly so that print(1.999, 2) prints as "2.00"
+  double rounding = 0.5;
+  for (uint8_t i=0; i<digits; ++i)
+    rounding /= 10.0;
+
+  number += rounding;
+
+  // Extract the integer part of the number and print it
+  unsigned long int_part = (unsigned long)number;
+  double remainder = number - (double)int_part;
+  SerialMon.print(int_part);
+
+  // Print the decimal point, but only if there are digits beyond
+  if (digits > 0)
+    SerialMon.print("."); 
+
+  // Extract digits from the remainder one at a time
+  while (digits-- > 0) 
+  {
+    remainder *= 10.0;
+    int toPrint = int(remainder);
+    SerialMon.print(toPrint);
+    remainder -= toPrint;
+  }
 }
