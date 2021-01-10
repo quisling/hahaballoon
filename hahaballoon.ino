@@ -67,12 +67,11 @@ TwoWire I2CBME = TwoWire(1);
 
 
 //-------GPS config-----
-#include <TinyGPS.h>
+#include <TinyGPS++.h>
 #include <SoftwareSerial.h>
 //HardwareSerial serialGPS(2);
 //serialGPS.begin(9600, SERIAL_8N1, 32, 33);
 SoftwareSerial gpsInterface(32, 33);
-TinyGPS gps;
 
 // TinyGSM Client for Internet connection
 TinyGsmClient client(modem);
@@ -96,7 +95,9 @@ bool setPowerBoostKeepOn(int en){
   return I2CPower.endTransmission() == 0;
 }
 
-void gpsdump(TinyGPS &gps);
+void sendGsmData(TinyGPSPlus &gps);
+void gpsdump(TinyGPSPlus &gps);
+String floatToString(float &number, int digits);
 void printFloat(double f, int digits = 2);
 
 void setup() {
@@ -147,6 +148,27 @@ void setup() {
 }
 
 void loop() {
+  TinyGPSPlus gps;
+  readGPS(gps);
+  //while (gpsInterface.available()) {
+  //  gps.encode(gpsInterface.read());
+  //}
+  sendGsmData(gps);
+  
+  delay(2000);
+
+  // Put ESP32 into deep sleep mode (with timer wake up)
+  //esp_deep_sleep_start();
+}
+
+void sendGsmData(TinyGPSPlus& gps){
+
+
+  SerialMon.println("Latitude: " + String(gps.location.lat(), 6) + "Longitude: " + String(gps.location.lng(), 6));
+  if (gps.location.lat() == 0 || gps.location.lng() == 0 ){
+    return;
+  }
+  
   SerialMon.print("Connecting to APN: ");
   SerialMon.print(apn);
   if (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
@@ -166,7 +188,10 @@ void loop() {
     
       // Making an HTTP GET request
       SerialMon.println("Performing HTTP GET request...");
-      String httpRequestData = "GET https://api.thingspeak.com/update.json?api_key=9N13CC4IWEVHIBLL&field1=" + String(millis()) + String(" HTTP/1.0");
+      //gps.f_get_position(&flat, &flon, &age);
+      //SerialMon.println("Printing floatostring" + floatToString(flat, 5));
+      String httpRequestData = "GET https://api.thingspeak.com/update.json?api_key=9N13CC4IWEVHIBLL&latitude=" + String(gps.location.lat(),6) + "&longitude=" + String(gps.location.lng(),6) + String(" HTTP/1.0");
+     
       client.println(httpRequestData);
       client.println();
       client.println();
@@ -190,20 +215,13 @@ void loop() {
       SerialMon.println(F("GPRS disconnected"));
     }
   }
-  delay(2000);
-
-  readGPS();
-  // Put ESP32 into deep sleep mode (with timer wake up)
-  //esp_deep_sleep_start();
 }
-
-
-void readGPS()
+void readGPS(TinyGPSPlus &gps)
 {
   bool newdata = false;
   unsigned long start = millis();
   // Every 5 seconds we print an update
-  while (millis() - start < 5000) 
+  while (millis() - start < 2000) 
   {
     if (gpsInterface.available()) 
 
@@ -212,9 +230,9 @@ void readGPS()
       if (gps.encode(c)) 
       {
         newdata = true;
-        break;  // uncomment to print new data immediately!
+        //break;  // uncomment to print new data immediately!
       }else{
-        SerialMon.print(c);  // uncomment to see raw GPS data
+        //SerialMon.print(c);  // uncomment to see raw GPS data
       }
     }
   }
@@ -223,14 +241,90 @@ void readGPS()
   {
     SerialMon.println("Acquired Data");
     SerialMon.println("-------------");
-    gpsdump(gps);
+    //gpsdump(gps);
     SerialMon.println("-------------");
     SerialMon.println();
   }
 }
 
-void gpsdump(TinyGPS &gps)
+String floatToString(float &number, int digits)
 {
+  String positionString = "";
+  if (number < 0.0) 
+  {
+     positionString += "-";
+     number = -number;
+  }
+
+  // Round correctly so that print(1.999, 2) prints as "2.00"
+  double rounding = 0.5;
+  for (uint8_t i=0; i<digits; ++i)
+    rounding /= 10.0;
+
+  number += rounding;
+
+  // Extract the integer part of the number and print it
+  unsigned long int_part = (unsigned long)number;
+  double remainder = number - (double)int_part;
+  //SerialMon.print(int_part);
+  positionString += String(int_part);
+
+  // Print the decimal point, but only if there are digits beyond
+  if (digits > 0)
+    //SerialMon.print(".");
+    positionString += "."; 
+
+  // Extract digits from the remainder one at a time
+  while (digits-- > 0) 
+  {
+    remainder *= 10.0;
+    int toPrint = int(remainder);
+    //SerialMon.print(toPrint);
+    positionString += String(toPrint);
+    remainder -= toPrint;
+  }
+
+  return positionString;
+}
+
+void printFloat(double number, int digits)
+{
+  // Handle negative numbers
+  if (number < 0.0) 
+  {
+     SerialMon.print('-');
+     number = -number;
+  }
+
+  // Round correctly so that print(1.999, 2) prints as "2.00"
+  double rounding = 0.5;
+  for (uint8_t i=0; i<digits; ++i)
+    rounding /= 10.0;
+
+  number += rounding;
+
+  // Extract the integer part of the number and print it
+  unsigned long int_part = (unsigned long)number;
+  double remainder = number - (double)int_part;
+  SerialMon.print(int_part);
+
+  // Print the decimal point, but only if there are digits beyond
+  if (digits > 0)
+    SerialMon.print("."); 
+
+  // Extract digits from the remainder one at a time
+  while (digits-- > 0) 
+  {
+    remainder *= 10.0;
+    int toPrint = int(remainder);
+    SerialMon.print(toPrint);
+    remainder -= toPrint;
+  }
+}
+
+void gpsdump(TinyGPSPlus &gps)
+{
+ /*
   long lat, lon;
   float flat, flon;
   unsigned long age, date, time, chars;
@@ -276,39 +370,5 @@ void gpsdump(TinyGPS &gps)
   gps.stats(&chars, &sentences, &failed);
   SerialMon.print("Stats: characters: "); SerialMon.print(chars); SerialMon.print(" sentences: ");
     SerialMon.print(sentences); SerialMon.print(" failed checksum: "); SerialMon.println(failed);
-}
-
-void printFloat(double number, int digits)
-{
-  // Handle negative numbers
-  if (number < 0.0) 
-  {
-     SerialMon.print('-');
-     number = -number;
-  }
-
-  // Round correctly so that print(1.999, 2) prints as "2.00"
-  double rounding = 0.5;
-  for (uint8_t i=0; i<digits; ++i)
-    rounding /= 10.0;
-
-  number += rounding;
-
-  // Extract the integer part of the number and print it
-  unsigned long int_part = (unsigned long)number;
-  double remainder = number - (double)int_part;
-  SerialMon.print(int_part);
-
-  // Print the decimal point, but only if there are digits beyond
-  if (digits > 0)
-    SerialMon.print("."); 
-
-  // Extract digits from the remainder one at a time
-  while (digits-- > 0) 
-  {
-    remainder *= 10.0;
-    int toPrint = int(remainder);
-    SerialMon.print(toPrint);
-    remainder -= toPrint;
-  }
+    */
 }
