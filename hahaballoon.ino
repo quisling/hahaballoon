@@ -96,9 +96,6 @@ bool setPowerBoostKeepOn(int en){
 }
 
 void sendGsmData(TinyGPSPlus &gps);
-void gpsdump(TinyGPSPlus &gps);
-String floatToString(float &number, int digits);
-void printFloat(double f, int digits = 2);
 
 void setup() {
   // Set serial monitor debugging window baud rate to 115200
@@ -150,9 +147,6 @@ void setup() {
 void loop() {
   TinyGPSPlus gps;
   readGPS(gps);
-  //while (gpsInterface.available()) {
-  //  gps.encode(gpsInterface.read());
-  //}
   sendGsmData(gps);
   
   delay(2000);
@@ -164,7 +158,8 @@ void loop() {
 void sendGsmData(TinyGPSPlus& gps){
 
 
-  SerialMon.println("Latitude: " + String(gps.location.lat(), 6) + "Longitude: " + String(gps.location.lng(), 6));
+  SerialMon.println("Latitude: " + String(gps.location.lat(), 6) + " Longitude: " + String(gps.location.lng(), 6));
+  SerialMon.println("Altitude: " + String(gps.altitude.meters()) + " Sattelites: " + String(gps.satellites.value()));
   if (gps.location.lat() == 0 || gps.location.lng() == 0 ){
     return;
   }
@@ -188,11 +183,14 @@ void sendGsmData(TinyGPSPlus& gps){
     
       // Making an HTTP GET request
       SerialMon.println("Performing HTTP GET request...");
-      //gps.f_get_position(&flat, &flon, &age);
-      //SerialMon.println("Printing floatostring" + floatToString(flat, 5));
-      String httpRequestData = "GET https://api.thingspeak.com/update.json?api_key=9N13CC4IWEVHIBLL&latitude=" + String(gps.location.lat(),6) + "&longitude=" + String(gps.location.lng(),6) + String(" HTTP/1.0");
+      String httpRequestData = "GET https://api.thingspeak.com/update.json?api_key=9N13CC4IWEVHIBLL";
      
-      client.println(httpRequestData);
+      client.print(httpRequestData);
+      client.print("&latitude=" + String(gps.location.lat(),6));
+      client.print("&longitude=" + String(gps.location.lng(),6));
+      client.print("&field1=" + String(gps.altitude.meters()));
+      client.print("&field2=" + String(gps.satellites.value()));
+      client.println(String(" HTTP/1.0"));
       client.println();
       client.println();
       client.println();
@@ -216,12 +214,13 @@ void sendGsmData(TinyGPSPlus& gps){
     }
   }
 }
+
 void readGPS(TinyGPSPlus &gps)
 {
   bool newdata = false;
   unsigned long start = millis();
   // Every 5 seconds we print an update
-  while (millis() - start < 2000) 
+  while (millis() - start < 3000) 
   {
     if (gpsInterface.available()) 
 
@@ -236,139 +235,4 @@ void readGPS(TinyGPSPlus &gps)
       }
     }
   }
-
-  if (newdata) 
-  {
-    SerialMon.println("Acquired Data");
-    SerialMon.println("-------------");
-    //gpsdump(gps);
-    SerialMon.println("-------------");
-    SerialMon.println();
-  }
-}
-
-String floatToString(float &number, int digits)
-{
-  String positionString = "";
-  if (number < 0.0) 
-  {
-     positionString += "-";
-     number = -number;
-  }
-
-  // Round correctly so that print(1.999, 2) prints as "2.00"
-  double rounding = 0.5;
-  for (uint8_t i=0; i<digits; ++i)
-    rounding /= 10.0;
-
-  number += rounding;
-
-  // Extract the integer part of the number and print it
-  unsigned long int_part = (unsigned long)number;
-  double remainder = number - (double)int_part;
-  //SerialMon.print(int_part);
-  positionString += String(int_part);
-
-  // Print the decimal point, but only if there are digits beyond
-  if (digits > 0)
-    //SerialMon.print(".");
-    positionString += "."; 
-
-  // Extract digits from the remainder one at a time
-  while (digits-- > 0) 
-  {
-    remainder *= 10.0;
-    int toPrint = int(remainder);
-    //SerialMon.print(toPrint);
-    positionString += String(toPrint);
-    remainder -= toPrint;
-  }
-
-  return positionString;
-}
-
-void printFloat(double number, int digits)
-{
-  // Handle negative numbers
-  if (number < 0.0) 
-  {
-     SerialMon.print('-');
-     number = -number;
-  }
-
-  // Round correctly so that print(1.999, 2) prints as "2.00"
-  double rounding = 0.5;
-  for (uint8_t i=0; i<digits; ++i)
-    rounding /= 10.0;
-
-  number += rounding;
-
-  // Extract the integer part of the number and print it
-  unsigned long int_part = (unsigned long)number;
-  double remainder = number - (double)int_part;
-  SerialMon.print(int_part);
-
-  // Print the decimal point, but only if there are digits beyond
-  if (digits > 0)
-    SerialMon.print("."); 
-
-  // Extract digits from the remainder one at a time
-  while (digits-- > 0) 
-  {
-    remainder *= 10.0;
-    int toPrint = int(remainder);
-    SerialMon.print(toPrint);
-    remainder -= toPrint;
-  }
-}
-
-void gpsdump(TinyGPSPlus &gps)
-{
- /*
-  long lat, lon;
-  float flat, flon;
-  unsigned long age, date, time, chars;
-  int year;
-  byte month, day, hour, minute, second, hundredths;
-  unsigned short sentences, failed;
-
-  gps.get_position(&lat, &lon, &age);
-  SerialMon.print("Lat/Long(10^-5 deg): "); SerialMon.print(lat); SerialMon.print(", "); SerialMon.print(lon); 
-  SerialMon.print(" Fix age: "); SerialMon.print(age); SerialMon.println("ms.");
-
-  // On Arduino, GPS characters may be lost during lengthy SerialMon.print()
-  // On Teensy, SerialMon prints to USB, which has large output buffering and
-  //   runs very fast, so it's not necessary to worry about missing 4800
-  //   baud GPS characters.
-
-  gps.f_get_position(&flat, &flon, &age);
-  SerialMon.print("Lat/Long(float): "); printFloat(flat, 5); SerialMon.print(", "); printFloat(flon, 5);
-    SerialMon.print(" Fix age: "); SerialMon.print(age); SerialMon.println("ms.");
-
-  gps.get_datetime(&date, &time, &age);
-  SerialMon.print("Date(ddmmyy): "); SerialMon.print(date); SerialMon.print(" Time(hhmmsscc): ");
-    SerialMon.print(time);
-  SerialMon.print(" Fix age: "); SerialMon.print(age); SerialMon.println("ms.");
-
-  gps.crack_datetime(&year, &month, &day, &hour, &minute, &second, &hundredths, &age);
-  SerialMon.print("Date: "); SerialMon.print(static_cast<int>(month)); SerialMon.print("/"); 
-    SerialMon.print(static_cast<int>(day)); SerialMon.print("/"); SerialMon.print(year);
-  SerialMon.print("  Time: "); SerialMon.print(static_cast<int>(hour+8));  SerialMon.print(":"); //SerialMon.print("UTC +08:00 Malaysia");
-    SerialMon.print(static_cast<int>(minute)); SerialMon.print(":"); SerialMon.print(static_cast<int>(second));
-    SerialMon.print("."); SerialMon.print(static_cast<int>(hundredths)); SerialMon.print(" UTC +08:00 Malaysia");
-  SerialMon.print("  Fix age: ");  SerialMon.print(age); SerialMon.println("ms.");
-
-  SerialMon.print("Alt(cm): "); SerialMon.print(gps.altitude()); SerialMon.print(" Course(10^-2 deg): ");
-    SerialMon.print(gps.course()); SerialMon.print(" Speed(10^-2 knots): "); SerialMon.println(gps.speed());
-  SerialMon.print("Alt(float): "); printFloat(gps.f_altitude()); SerialMon.print(" Course(float): ");
-    printFloat(gps.f_course()); SerialMon.println();
-  SerialMon.print("Speed(knots): "); printFloat(gps.f_speed_knots()); SerialMon.print(" (mph): ");
-    printFloat(gps.f_speed_mph());
-  SerialMon.print(" (mps): "); printFloat(gps.f_speed_mps()); SerialMon.print(" (kmph): ");
-    printFloat(gps.f_speed_kmph()); SerialMon.println();
-
-  gps.stats(&chars, &sentences, &failed);
-  SerialMon.print("Stats: characters: "); SerialMon.print(chars); SerialMon.print(" sentences: ");
-    SerialMon.print(sentences); SerialMon.print(" failed checksum: "); SerialMon.println(failed);
-    */
 }
