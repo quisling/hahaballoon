@@ -1,5 +1,5 @@
 // Your GPRS credentials (leave empty, if not needed)
-const char apn[]      = "services.telenor.se"; // APN (example: internet.vodafone.pt) use https://wiki.apnchanger.org
+const char apn[]      = "4g.tele2.se"; // APN (example: internet.vodafone.pt) use https://wiki.apnchanger.org
 const char gprsUser[] = ""; // GPRS User
 const char gprsPass[] = ""; // GPRS Password
 
@@ -8,9 +8,9 @@ const char simPIN[]   = "";
 
 // Server details
 // The server variable can be just a domain name or it can have a subdomain. It depends on the service you are using
-const char server[] = "thingspeak.com"; // domain name: example.com, maker.ifttt.com, etc
+const char server[] = "luminare.se"; // domain name: example.com, maker.ifttt.com, etc
 const char resource[] = "update?";         // resource path, for example: /post-data.php
-const int  port = 80;                             // server port number
+const int  port = 5555;                             // server port number
 
 // Keep this API Key value to be compatible with the PHP code provided in the project page. 
 // If you change the apiKeyValue value, the PHP file /post-data.php also needs to have the same key 
@@ -28,8 +28,8 @@ String apiKeyValue = "";
 #define I2C_SDA_2            18
 #define I2C_SCL_2            19
 // UBLOX GPS pins
-#define GPS_TX               32
-#define GPS_RX               33
+#define GPS_TX               14 // orange (TX on GPS)
+#define GPS_RX               12 // red (RX on GPS)
 
 // Set serial for debug console (to Serial Monitor, default speed 115200)
 #define SerialMon Serial
@@ -45,6 +45,57 @@ String apiKeyValue = "";
 
 #include <Wire.h>
 #include <TinyGsmClient.h>
+#include <deque>
+
+/***
+ * Position database
+ */
+class positionDb
+{
+  public:
+  
+  struct positionElement
+  {
+    uint32_t timestamp;
+    float    longitude;
+    float    latitude;
+    float    altitude;
+    uint8_t  satFixes;
+  };
+
+  void addPosition(positionElement&& pe)
+  {
+    if(db.size() >= elementLimit)
+    {
+      db.pop_back();
+    }
+    db.emplace_front(pe);
+  }
+
+  positionElement consumeNewestElement()
+  {
+    auto elem = db.front();
+    db.pop_front();
+    return elem;
+  }
+  positionElement consumeOldestElement()
+  {
+    auto elem = db.back();
+    db.pop_back();
+    return elem;;
+  }
+
+  bool hasPositionElements()
+  {
+    return !db.empty();
+  }
+
+  private:
+  uint16_t elementLimit = 5120; // approximatly 100kb if positionElement is ~20 bytes
+  std::deque<positionElement> db;
+};
+
+
 
 #ifdef DUMP_AT_COMMANDS
   #include <StreamDebugger.h>
@@ -71,7 +122,7 @@ TwoWire I2CBME = TwoWire(1);
 #include <SoftwareSerial.h>
 //HardwareSerial serialGPS(2);
 //serialGPS.begin(9600, SERIAL_8N1, 32, 33);
-SoftwareSerial gpsInterface(32, 33);
+SoftwareSerial gpsInterface(GPS_TX, GPS_RX);
 
 // TinyGSM Client for Internet connection
 TinyGsmClient client(modem);
@@ -142,12 +193,37 @@ void setup() {
 
   // Configure the wake up source as timer wake up  
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+
+  
+
+  std::deque<positionDb::positionElement> queue;
+  SerialMon.println("Max size: " + String(queue.max_size()) + " Size of element: " + String(sizeof(positionDb::positionElement)) );
+  
+  
 }
 
 void loop() {
   TinyGPSPlus gps;
-  readGPS(gps);
-  sendGsmData(gps);
+  positionDb posDb;
+  
+  bool runNext = true;
+  auto start = millis();
+  while(runNext)
+  {
+    if(readGPS(gps))
+    {
+      extractGpsData(gps,posDb);
+    }
+
+    if(start + 5000 < millis())
+    {
+      start = millis();
+      sendGsmData(posDb);
+    }
+
+  }
+  
+  sendGsmData(posDb);
   
   delay(2000);
 
@@ -155,12 +231,22 @@ void loop() {
   //esp_deep_sleep_start();
 }
 
-void sendGsmData(TinyGPSPlus& gps){
-
-
+void extractGpsData(TinyGPSPlus& gps, positionDb& posDb)
+{
   SerialMon.println("Latitude: " + String(gps.location.lat(), 6) + " Longitude: " + String(gps.location.lng(), 6));
   SerialMon.println("Altitude: " + String(gps.altitude.meters()) + " Sattelites: " + String(gps.satellites.value()));
-  if (gps.location.lat() == 0 || gps.location.lng() == 0 ){
+  if (gps.location.lat() == 0 || gps.location.lng() == 0 || gps.satellites.value() < 3 ){
+    return;
+  }
+
+  posDb.addPosition({0,gps.location.lng(),gps.location.lat(),gps.altitude.meters(),gps.satellites.value()});
+  
+}
+
+void sendGsmData(positionDb& posDb){
+  bool sendNext = true;
+
+  if (!posDb.hasPositionElements()){
     return;
   }
   
@@ -184,26 +270,41 @@ void sendGsmData(TinyGPSPlus& gps){
       // Making an HTTP GET request
       SerialMon.println("Performing HTTP GET request...");
       String httpRequestData = "GET https://api.thingspeak.com/update.json?api_key=9N13CC4IWEVHIBLL";
-     
-      client.print(httpRequestData);
-      client.print("&latitude=" + String(gps.location.lat(),6));
-      client.print("&longitude=" + String(gps.location.lng(),6));
-      client.print("&field1=" + String(gps.altitude.meters()));
-      client.print("&field2=" + String(gps.satellites.value()));
-      client.println(String(" HTTP/1.0"));
-      client.println();
-      client.println();
-      client.println();
-
-      unsigned long timeout = millis();
-      while (client.connected() && millis() - timeout < 10000L) {
-        // Print available data (HTTP response from server)
-        while (client.available()) {
-          char c = client.read();
-          SerialMon.print(c);
-          timeout = millis();
+      
+      while(posDb.hasPositionElements() && sendNext)
+      {
+        sendNext = false;
+        auto posElem = posDb.consumeNewestElement();
+        client.print(httpRequestData);
+        client.print("&latitude=" + String(posElem.latitude,6));
+        client.print("&longitude=" + String(posElem.longitude,6));
+        client.print("&field1=" + String(posElem.altitude,6));
+        client.print("&field2=" + String(posElem.satFixes));
+        client.println(String(" HTTP/1.0"));
+        client.println();
+        client.println();
+        client.println();
+        
+        unsigned long timeout = millis();
+        while (client.connected() && millis() - timeout < 1000L) 
+        {
+          // Print available data (HTTP response from server)
+          while (client.available()) 
+          {
+            sendNext=true;
+            char c = client.read();
+            SerialMon.print(c);
+            timeout = millis();
+          }
+        }
+        if(!sendNext) // we failed to send current value ( never got a response ), put back message in db
+        {
+          SerialMon.println("Failed to send position element...");
+          posDb.addPosition(std::move(posElem));
         }
       }
+      
+
       SerialMon.println();
     
       // Close client and disconnect
@@ -215,12 +316,12 @@ void sendGsmData(TinyGPSPlus& gps){
   }
 }
 
-void readGPS(TinyGPSPlus &gps)
+bool readGPS(TinyGPSPlus &gps)
 {
   bool newdata = false;
   unsigned long start = millis();
-  // Every 5 seconds we print an update
-  while (millis() - start < 3000) 
+  // Every seconds we print an update
+  while (millis() - start < 1000) 
   {
     if (gpsInterface.available()) 
 
@@ -235,4 +336,5 @@ void readGPS(TinyGPSPlus &gps)
       }
     }
   }
+  return newdata;
 }
