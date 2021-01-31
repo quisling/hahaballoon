@@ -1,5 +1,13 @@
 // Your GPRS credentials (leave empty, if not needed)
-const char apn[]      = "4g.tele2.se"; // APN (example: internet.vodafone.pt) use https://wiki.apnchanger.org
+#define TELE2              false
+#define DEBUG              false
+
+#if TELE2
+  const char apn[]      = "4g.tele2.se"; // APN (example: internet.vodafone.pt) use https://wiki.apnchanger.org
+#else
+  const char apn[]      = "services.telenor.se";
+#endif
+
 const char gprsUser[] = ""; // GPRS User
 const char gprsPass[] = ""; // GPRS Password
 
@@ -8,9 +16,16 @@ const char simPIN[]   = "";
 
 // Server details
 // The server variable can be just a domain name or it can have a subdomain. It depends on the service you are using
-const char server[] = "luminare.se"; // domain name: example.com, maker.ifttt.com, etc
-const char resource[] = "update?";         // resource path, for example: /post-data.php
-const int  port = 5555;                             // server port number
+
+#if DEBUG
+  const char server[] = "luminare.se"; // domain name: example.com, maker.ifttt.com, etc
+  const char resource[] = "update?";         // resource path, for example: /post-data.php
+  const int  port = 5555;                             // server port number
+#else
+  const char server[] = "thingspeak.com"; // domain name: example.com, maker.ifttt.com, etc
+  const char resource[] = "update?";         // resource path, for example: /post-data.php
+  const int  port = 80; // server port number
+#endif
 
 // Keep this API Key value to be compatible with the PHP code provided in the project page. 
 // If you change the apiKeyValue value, the PHP file /post-data.php also needs to have the same key 
@@ -24,12 +39,12 @@ String apiKeyValue = "";
 #define MODEM_RX             26
 #define I2C_SDA              21
 #define I2C_SCL              22
-// BME280 pins
+// BMP180 pins
 #define I2C_SDA_2            18
 #define I2C_SCL_2            19
 // UBLOX GPS pins
-#define GPS_TX               14 // orange (TX on GPS)
-#define GPS_RX               12 // red (RX on GPS)
+#define GPS_TX               32 // orange (TX on GPS)
+#define GPS_RX               33 // red (RX on GPS)
 
 // Set serial for debug console (to Serial Monitor, default speed 115200)
 #define SerialMon Serial
@@ -60,6 +75,8 @@ class positionDb
     float    longitude;
     float    latitude;
     float    altitude;
+    float    barometricAltitude;
+    float    temperature;
     uint8_t  satFixes;
   };
 
@@ -106,22 +123,22 @@ class positionDb
 #endif
 
 //------Barometer config-------
-//#include <Adafruit_Sensor.h>
-//#include <Adafruit_BME280.h>
+
+#include <Adafruit_BMP085_U.h>
+Adafruit_BMP085_Unified bmpBarometer = Adafruit_BMP085_Unified(10085);
+#define SEA_LEVEL_PRESSURE 99800
 
 // I2C for SIM800 (to keep it running when powered from battery)
 TwoWire I2CPower = TwoWire(0);
 
 // I2C for BME280 sensor
-TwoWire I2CBME = TwoWire(1);
+//TwoWire I2CBME = TwoWire(1);
 //Adafruit_BME280 bme; 
 
 
 //-------GPS config-----
 #include <TinyGPS++.h>
 #include <SoftwareSerial.h>
-//HardwareSerial serialGPS(2);
-//serialGPS.begin(9600, SERIAL_8N1, 32, 33);
 SoftwareSerial gpsInterface(GPS_TX, GPS_RX);
 
 // TinyGSM Client for Internet connection
@@ -147,15 +164,15 @@ bool setPowerBoostKeepOn(int en){
 }
 
 void sendGsmData(TinyGPSPlus &gps);
+bool getBarometricData(float &barAltitude, float &temperature);
 
 void setup() {
   // Set serial monitor debugging window baud rate to 115200
   SerialMon.begin(115200);
   gpsInterface.begin(9600);
-
   // Start I2C communication
   I2CPower.begin(I2C_SDA, I2C_SCL, 400000);
-  I2CBME.begin(I2C_SDA_2, I2C_SCL_2, 400000);
+  //I2CBME.begin(I2C_SDA_2, I2C_SCL_2, 400000);
 
   // Keep power when running from battery
   bool isOk = setPowerBoostKeepOn(1);
@@ -176,26 +193,26 @@ void setup() {
   // Restart SIM800 module, it takes quite some time
   // To skip it, call init() instead of restart()
   SerialMon.println("Initializing modem...");
-  modem.init();
-  //modem.restart();
-  // use modem.init() if you don't need the complete restart
+  //modem.init();
+  modem.restart();  // use modem.init() if you don't need the complete restart
 
   // Unlock your SIM card with a PIN if needed
   if (strlen(simPIN) && modem.getSimStatus() != 3 ) {
     modem.simUnlock(simPIN);
   }
-  
-  // You might need to change the BME280 I2C address, in our case it's 0x76
-/*  if (!bme.begin(0x76, &I2CBME)) {
-    Serial.println("Could not find a valid BME280 sensor, check wiring!");
-    while (1);
-  }*/
 
   // Configure the wake up source as timer wake up  
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
 
+  // Initialize barometric sensor
+  Wire.begin(I2C_SDA_2, I2C_SCL_2);
+  if(!bmpBarometer.begin())
+  {
+    /* There was a problem detecting the BMP085 ... check your connections */
+    SerialMon.print("Ooops, no BMP085 detected ... Check your wiring or I2C ADDR!");
+    while(1);
+  }
   
-
   std::deque<positionDb::positionElement> queue;
   SerialMon.println("Max size: " + String(queue.max_size()) + " Size of element: " + String(sizeof(positionDb::positionElement)) );
   
@@ -205,14 +222,21 @@ void setup() {
 void loop() {
   TinyGPSPlus gps;
   positionDb posDb;
-  
+  float barometricAltitude, temperature;
   bool runNext = true;
   auto start = millis();
   while(runNext)
   {
+    if (getBarometricData(barometricAltitude, temperature))
+    {
+      SerialMon.println("Altitude: " + String(barometricAltitude, 6) + " m Temperature: " + String(temperature, 6) + " C");
+    }
     if(readGPS(gps))
     {
-      extractGpsData(gps,posDb);
+      extractGpsData(gps,posDb,barometricAltitude, temperature);
+    }
+    else{
+      SerialMon.println("Gps Not available");
     }
 
     if(start + 5000 < millis())
@@ -220,26 +244,25 @@ void loop() {
       start = millis();
       sendGsmData(posDb);
     }
-
   }
   
   sendGsmData(posDb);
-  
-  delay(2000);
+  delay(5000);
 
   // Put ESP32 into deep sleep mode (with timer wake up)
   //esp_deep_sleep_start();
 }
 
-void extractGpsData(TinyGPSPlus& gps, positionDb& posDb)
+void extractGpsData(TinyGPSPlus& gps, positionDb& posDb, float& barometricAltitude, float& temperature)
 {
   SerialMon.println("Latitude: " + String(gps.location.lat(), 6) + " Longitude: " + String(gps.location.lng(), 6));
-  SerialMon.println("Altitude: " + String(gps.altitude.meters()) + " Sattelites: " + String(gps.satellites.value()));
+  SerialMon.println("Altitude: " + String(gps.altitude.meters()) + "M Sattelites: " + String(gps.satellites.value()));
+  SerialMon.println("Barometric Altitude: " + String(barometricAltitude, 2) + "M Temperature: " + String(temperature, 2) + " C");
   if (gps.location.lat() == 0 || gps.location.lng() == 0 || gps.satellites.value() < 3 ){
     return;
   }
 
-  posDb.addPosition({0,gps.location.lng(),gps.location.lat(),gps.altitude.meters(),gps.satellites.value()});
+  posDb.addPosition({0,gps.location.lng(),gps.location.lat(),gps.altitude.meters(),gps.satellites.value(), barometricAltitude, temperature});
   
 }
 
@@ -276,10 +299,13 @@ void sendGsmData(positionDb& posDb){
         sendNext = false;
         auto posElem = posDb.consumeNewestElement();
         client.print(httpRequestData);
+        client.print("&field1=" + String(posElem.barometricAltitude,2));
+        client.print("&field2=" + String(posElem.temperature,2));
+        client.print("&field3=" + String(posElem.satFixes,0));
         client.print("&latitude=" + String(posElem.latitude,6));
         client.print("&longitude=" + String(posElem.longitude,6));
-        client.print("&field1=" + String(posElem.altitude,6));
-        client.print("&field2=" + String(posElem.satFixes));
+        client.print("&elevation=" + String(posElem.altitude,6));
+        client.print("&status=" + String("Splendid"));
         client.println(String(" HTTP/1.0"));
         client.println();
         client.println();
@@ -302,6 +328,7 @@ void sendGsmData(positionDb& posDb){
           SerialMon.println("Failed to send position element...");
           posDb.addPosition(std::move(posElem));
         }
+        delay(4000);
       }
       
 
@@ -324,7 +351,6 @@ bool readGPS(TinyGPSPlus &gps)
   while (millis() - start < 1000) 
   {
     if (gpsInterface.available()) 
-
     {
       char c = gpsInterface.read();
       if (gps.encode(c)) 
@@ -337,4 +363,27 @@ bool readGPS(TinyGPSPlus &gps)
     }
   }
   return newdata;
+}
+
+bool getBarometricData(float &barometricAltitude, float &temperature)
+{
+  
+  /* Get a new sensor event */ 
+  sensors_event_t event;
+  bmpBarometer.getEvent(&event);
+  
+  /* Display the results (barometric pressure is measure in hPa) */
+  if (event.pressure)
+  {
+    float pressure;
+    bmpBarometer.getPressure(&pressure);
+    bmpBarometer.getTemperature(&temperature);
+    barometricAltitude = bmpBarometer.pressureToAltitude(SEA_LEVEL_PRESSURE, pressure, temperature);
+    return true;
+  }
+  else
+  {
+    SerialMon.println("Sensor error");
+    return false;
+  }
 }
