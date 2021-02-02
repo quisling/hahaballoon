@@ -18,13 +18,13 @@ const char simPIN[]   = "";
 // The server variable can be just a domain name or it can have a subdomain. It depends on the service you are using
 
 #if DEBUG
-  const char server[] = "luminare.se"; // domain name: example.com, maker.ifttt.com, etc
-  const char resource[] = "update?";         // resource path, for example: /post-data.php
-  const int  port = 5555;                             // server port number
+  const char server[] = "luminare.se";      // domain name: example.com, maker.ifttt.com, etc
+  const char resource[] = "update?";        // resource path, for example: /post-data.php
+  const int  port = 5555;                    // server port number
 #else
-  const char server[] = "thingspeak.com"; // domain name: example.com, maker.ifttt.com, etc
-  const char resource[] = "update?";         // resource path, for example: /post-data.php
-  const int  port = 80; // server port number
+  const char server[] = "thingspeak.com";   // domain name: example.com, maker.ifttt.com, etc
+  const char resource[] = "update?";        // resource path, for example: /post-data.php
+  const int  port = 80;                     // server port number
 #endif
 
 // Keep this API Key value to be compatible with the PHP code provided in the project page. 
@@ -39,6 +39,7 @@ String apiKeyValue = "";
 #define MODEM_RX             26
 #define I2C_SDA              21
 #define I2C_SCL              22
+#define BATTERY_VOLTAGE      35
 // BMP180 pins
 #define I2C_SDA_2            18
 #define I2C_SCL_2            19
@@ -77,7 +78,8 @@ class positionDb
     float    altitude;
     float    barometricAltitude;
     float    temperature;
-    uint8_t  satFixes;
+    uint8_t  signalStrength;
+    float    batteryVoltage;
   };
 
   void addPosition(positionElement&& pe)
@@ -215,7 +217,10 @@ void setup() {
   
   std::deque<positionDb::positionElement> queue;
   SerialMon.println("Max size: " + String(queue.max_size()) + " Size of element: " + String(sizeof(positionDb::positionElement)) );
-  
+
+  // Activate pin for reading battery voltage
+  pinMode(BATTERY_VOLTAGE, INPUT);
+
   
 }
 
@@ -233,7 +238,7 @@ void loop() {
     }
     if(readGPS(gps))
     {
-      extractGpsData(gps,posDb,barometricAltitude, temperature);
+      extractGpsData(gps,posDb,barometricAltitude, temperature, (uint8_t)modem.getSignalQuality(), (float)((analogRead(BATTERY_VOLTAGE) * 7.45 ) / 4095));
     }
     else{
       SerialMon.println("Gps Not available");
@@ -253,16 +258,13 @@ void loop() {
   //esp_deep_sleep_start();
 }
 
-void extractGpsData(TinyGPSPlus& gps, positionDb& posDb, float& barometricAltitude, float& temperature)
+void extractGpsData(TinyGPSPlus& gps, positionDb& posDb, float& barometricAltitude, float& temperature, uint8_t signalStrength, float batteryVoltage)
 {
-  SerialMon.println("Latitude: " + String(gps.location.lat(), 6) + " Longitude: " + String(gps.location.lng(), 6));
-  SerialMon.println("Altitude: " + String(gps.altitude.meters()) + "M Sattelites: " + String(gps.satellites.value()));
-  SerialMon.println("Barometric Altitude: " + String(barometricAltitude, 2) + "M Temperature: " + String(temperature, 2) + " C");
   if (gps.location.lat() == 0 || gps.location.lng() == 0 || gps.satellites.value() < 3 ){
     return;
   }
 
-  posDb.addPosition({0,gps.location.lng(),gps.location.lat(),gps.altitude.meters(),gps.satellites.value(), barometricAltitude, temperature});
+  posDb.addPosition({gps.time.value(),gps.location.lng(),gps.location.lat(),gps.altitude.meters(), barometricAltitude, temperature, signalStrength, batteryVoltage});
   
 }
 
@@ -298,14 +300,21 @@ void sendGsmData(positionDb& posDb){
       {
         sendNext = false;
         auto posElem = posDb.consumeNewestElement();
+
+        SerialMon.println("Latitude: " + String(posElem.latitude,6) + " Longitude: " + String(posElem.longitude,6));
+        SerialMon.println("Altitude: " + String(posElem.altitude,6) + "m Battery Voltage: " + String(posElem.batteryVoltage,2) + " v");
+        SerialMon.println("Barometric Altitude: " + String(posElem.barometricAltitude,2) + "m Temperature: " + String(posElem.temperature,2) + " C");
+        SerialMon.println("Signal Strength: " + String(modem.getSignalQuality()) + " dB");
+        
         client.print(httpRequestData);
         client.print("&field1=" + String(posElem.barometricAltitude,2));
         client.print("&field2=" + String(posElem.temperature,2));
-        client.print("&field3=" + String(posElem.satFixes,0));
+        client.print("&field3=" + String(posElem.signalStrength));
+        client.print("&field4=" + String(posElem.batteryVoltage,2));
         client.print("&latitude=" + String(posElem.latitude,6));
         client.print("&longitude=" + String(posElem.longitude,6));
         client.print("&elevation=" + String(posElem.altitude,6));
-        client.print("&status=" + String("Splendid"));
+        //client.print("&status=" + String("Splendid"));
         client.println(String(" HTTP/1.0"));
         client.println();
         client.println();
