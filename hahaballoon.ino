@@ -1,6 +1,7 @@
 // Your GPRS credentials (leave empty, if not needed)
 #define TELE2              false
 #define DEBUG              false
+#define IBEACON            false
 
 #if TELE2
   const char apn[]      = "4g.tele2.se"; // APN (example: internet.vodafone.pt) use https://wiki.apnchanger.org
@@ -63,6 +64,14 @@ String apiKeyValue = "";
 #include <TinyGsmClient.h>
 #include <deque>
 
+
+//For BLE iBeacon
+#include "sys/time.h"
+#include "BLEDevice.h"
+#include "BLEUtils.h"
+#include "BLEBeacon.h"
+
+
 /***
  * Position database
  */
@@ -109,6 +118,11 @@ class positionDb
     return !db.empty();
   }
 
+  uint16_t getSize()
+  {
+    return db.size();
+  }
+
   private:
   uint16_t elementLimit = 5120; // approximatly 100kb if positionElement is ~20 bytes
   std::deque<positionElement> db;
@@ -128,7 +142,7 @@ class positionDb
 
 #include <Adafruit_BMP085_U.h>
 Adafruit_BMP085_Unified bmpBarometer = Adafruit_BMP085_Unified(10085);
-#define SEA_LEVEL_PRESSURE 99800
+#define SEA_LEVEL_PRESSURE 103000
 
 // I2C for SIM800 (to keep it running when powered from battery)
 TwoWire I2CPower = TwoWire(0);
@@ -146,10 +160,18 @@ SoftwareSerial gpsInterface(GPS_TX, GPS_RX);
 // TinyGSM Client for Internet connection
 TinyGsmClient client(modem);
 
+//BLE iBeacon config
+#ifdef IBEACON
+BLEAdvertising *pAdvertising;
+struct timeval now;
+#define BEACON_UUID           "8ec76ea3-6668-48da-9866-75be8bc86f4d"
+RTC_DATA_ATTR static time_t last;        // remember last boot in RTC Memory
+RTC_DATA_ATTR static uint32_t bootcount; // remember number of boots in RTC Memory
+#endif
 
 //-------ESP32 power save configuration------
 #define uS_TO_S_FACTOR 1000000     /* Conversion factor for micro seconds to seconds */
-#define TIME_TO_SLEEP  3600        /* Time ESP32 will go to sleep (in seconds) 3600 seconds = 1 hour */
+#define TIME_TO_SLEEP  30        /* Time ESP32 will go to sleep (in seconds) 3600 seconds = 1 hour */
 
 #define IP5306_ADDR          0x75
 #define IP5306_REG_SYS_CTL0  0x00
@@ -167,6 +189,7 @@ bool setPowerBoostKeepOn(int en){
 
 void sendGsmData(TinyGPSPlus &gps);
 bool getBarometricData(float &barAltitude, float &temperature);
+void setBeacon();
 
 void setup() {
   // Set serial monitor debugging window baud rate to 115200
@@ -195,8 +218,8 @@ void setup() {
   // Restart SIM800 module, it takes quite some time
   // To skip it, call init() instead of restart()
   SerialMon.println("Initializing modem...");
-  //modem.init();
-  modem.restart();  // use modem.init() if you don't need the complete restart
+  modem.init();
+  //modem.restart();  // use modem.init() if you don't need the complete restart
 
   // Unlock your SIM card with a PIN if needed
   if (strlen(simPIN) && modem.getSimStatus() != 3 ) {
@@ -221,7 +244,14 @@ void setup() {
   // Activate pin for reading battery voltage
   pinMode(BATTERY_VOLTAGE, INPUT);
 
-  
+  //BLE iBeacon setup
+  #ifdef IBEACON
+  gettimeofday(&now, NULL);
+  last = now.tv_sec;
+  BLEDevice::init("");
+  pAdvertising = BLEDevice::getAdvertising();
+  setBeacon();
+  #endif
 }
 
 void loop() {
@@ -249,18 +279,23 @@ void loop() {
       start = millis();
       sendGsmData(posDb);
     }
-  }
-  
-  sendGsmData(posDb);
-  delay(5000);
+    esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); // ESP32 wakes up every 30 seconds
 
-  // Put ESP32 into deep sleep mode (with timer wake up)
-  //esp_deep_sleep_start();
+    //iBeacon 
+    #ifdef IBEACON
+    pAdvertising->start();
+    Serial.println("Advertizing started...");
+    delay(100);
+    pAdvertising->stop();
+    #endif
+    delay(5000);
+  }
 }
 
 void extractGpsData(TinyGPSPlus& gps, positionDb& posDb, float& barometricAltitude, float& temperature, uint8_t signalStrength, float batteryVoltage)
 {
   if (gps.location.lat() == 0 || gps.location.lng() == 0 || gps.satellites.value() < 3 ){
+    SerialMon.println("No GPS lock, sattelites: " + String(gps.satellites.value()));
     return;
   }
 
@@ -274,7 +309,6 @@ void sendGsmData(positionDb& posDb){
   if (!posDb.hasPositionElements()){
     return;
   }
-  
   SerialMon.print("Connecting to APN: ");
   SerialMon.print(apn);
   if (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
@@ -298,6 +332,7 @@ void sendGsmData(positionDb& posDb){
       
       while(posDb.hasPositionElements() && sendNext)
       {
+        SerialMon.println("Number of elements is DB: " + String(posDb.getSize()));
         sendNext = false;
         auto posElem = posDb.consumeNewestElement();
 
@@ -321,7 +356,7 @@ void sendGsmData(positionDb& posDb){
         client.println();
         
         unsigned long timeout = millis();
-        while (client.connected() && millis() - timeout < 1000L) 
+        while (client.connected() && millis() - timeout < 2000L) 
         {
           // Print available data (HTTP response from server)
           while (client.available()) 
@@ -332,7 +367,7 @@ void sendGsmData(positionDb& posDb){
             timeout = millis();
           }
         }
-        if(!sendNext) // we failed to send current value ( never got a response ), put back message in db
+                if(!sendNext) // we failed to send current value ( never got a response ), put back message in db
         {
           SerialMon.println("Failed to send position element...");
           posDb.addPosition(std::move(posElem));
@@ -395,4 +430,28 @@ bool getBarometricData(float &barometricAltitude, float &temperature)
     SerialMon.println("Sensor error");
     return false;
   }
+}
+
+void setBeacon() {
+
+  BLEBeacon oBeacon = BLEBeacon();
+  oBeacon.setManufacturerId(0x4C00); // fake Apple 0x004C LSB (ENDIAN_CHANGE_U16!)
+  oBeacon.setProximityUUID(BLEUUID(BEACON_UUID));
+  oBeacon.setMajor((bootcount & 0xFFFF0000) >> 16);
+  oBeacon.setMinor(bootcount&0xFFFF);
+  BLEAdvertisementData oAdvertisementData = BLEAdvertisementData();
+  BLEAdvertisementData oScanResponseData = BLEAdvertisementData();
+  
+  oAdvertisementData.setFlags(0x04); // BR_EDR_NOT_SUPPORTED 0x04
+  
+  std::string strServiceData = "";
+  
+  strServiceData += (char)26;     // Len
+  strServiceData += (char)0xFF;   // Type
+  strServiceData += oBeacon.getData(); 
+  oAdvertisementData.addData(strServiceData);
+  
+  pAdvertising->setAdvertisementData(oAdvertisementData);
+  pAdvertising->setScanResponseData(oScanResponseData);
+
 }
