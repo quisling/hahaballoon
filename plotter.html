@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Mappy McMapface</title>
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no">
+    <meta charset="utf-8">
+    <style>
+      /* Always set the map height explicitly to define the size of the div
+       * element that contains the map. */
+      #map {
+        height: 100%;
+      }
+      /* Optional: Makes the sample page fill the window. */
+      html, body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+      }
+    </style>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC92pYZ1ddTOdFByv0B5XUFpAv68m7O9Wo"></script>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <script>
+
+      var map;
+        var x;
+        var y;
+        var barometricAltitude;
+        var gpsAltitude;
+        function loadmaps(){
+        	//Latitude
+            $.getJSON("https://api.thingspeak.com/channels/1126479/fields/5/last.json?api_key=MPILYPQGLHMCBPOT", function(result){
+            var m = result;
+            x=m.field5;
+            //console.debug("Latitude" + x);
+        });
+            //Longitude
+            $.getJSON("https://api.thingspeak.com/channels/1126479/fields/6/last.json?api_key=MPILYPQGLHMCBPOT", function(result){
+            var m = result;
+            y=Number(m.field6);
+            //console.debug("Longitude" + y); 	
+        });
+            //Longitude
+            $.getJSON("https://api.thingspeak.com/channels/1126479/fields/1/last.json?api_key=MPILYPQGLHMCBPOT", function(result){
+            var m = result;
+            barometricAltitude=Number(m.field1);
+            //console.debug("Barometric Altitude" + y); 	
+        });
+            //Longitude
+            $.getJSON("https://api.thingspeak.com/channels/1126479/fields/7/last.json?api_key=MPILYPQGLHMCBPOT", function(result){
+            var m = result;
+            gpsAltitude=m.field7;
+            //console.debug("GPS altitude" + y); 	
+               
+        }).done(function() {
+            
+                initialize();
+        });
+            
+        }
+              window.setInterval(function(){
+        loadmaps();
+            }, 9000);
+      function initialize() {
+          //alert(y);
+        var mapOptions = {
+          zoom: 15,
+          center: {lat: parseFloat(x), lng: parseFloat(y)}
+        };
+        map = new google.maps.Map(document.getElementById('map'),
+            mapOptions);
+
+        var marker = new google.maps.Marker({
+          position: {lat: parseFloat(x), lng: parseFloat(y)},
+          map: map
+        });
+
+        var infowindow = new google.maps.InfoWindow({
+          content: '<p>Marker Location:' + marker.getPosition() + '</br>GPSAltitude: ' + 
+          gpsAltitude + '</br>BarometricAltitude: ' + barometricAltitude + '</p>'
+        });
+
+        google.maps.event.addListener(marker, 'click', function() {
+          infowindow.open(map, marker);
+        });
+      }
+
+      google.maps.event.addDomListener(window, 'load', initialize);
+    </script>
+  </head>
+  <body>
+    <div id="map"></div>
+  </body>
+</html>
