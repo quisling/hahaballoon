@@ -232,9 +232,10 @@ void loop() {
   auto start = millis();
   while(runNext)
   {
-    if (getBarometricData(barometricAltitude, temperature))
+    if (!getBarometricData(barometricAltitude, temperature))
     {
-      SerialMon.println("Altitude: " + String(barometricAltitude, 6) + " m Temperature: " + String(temperature, 6) + " C");
+      barometricAltitude = NULL;
+      temperature = NULL;
     }
     if(readGPS(gps))
     {
@@ -244,12 +245,12 @@ void loop() {
       SerialMon.println("Gps Not available");
     }
 
-    if(start + 5000 < millis())
-    {
-      start = millis();
+    //if(start + 000 < millis())
+    //{
+      //start = millis();
       sendGsmData(posDb);
-    }
-    esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); // ESP32 wakes up every 30 seconds
+    //}
+    //esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); // ESP32 wakes up every 30 seconds
     
     delay(5000);
   }
@@ -257,97 +258,101 @@ void loop() {
 
 void extractGpsData(TinyGPSPlus& gps, positionDb& posDb, float& barometricAltitude, float& temperature, uint8_t signalStrength, float batteryVoltage)
 {
-  if (gps.location.lat() == 0 || gps.location.lng() == 0 || gps.satellites.value() < 3 ){
+  /*if (gps.location.lat() == 0 || gps.location.lng() == 0 || gps.satellites.value() < 3 ){
     SerialMon.println("No GPS lock, sattelites: " + String(gps.satellites.value()));
     return;
-  }
-  SerialMon.println("Millis since start: " + String(millis()) +" --GPS-TIME--" + String(gps.time.value()));
+  }*/
   posDb.addPosition({gps.time.value(),gps.location.lng(),gps.location.lat(),gps.altitude.meters(), barometricAltitude, temperature, signalStrength, batteryVoltage});
   
 }
 
 void sendGsmData(positionDb& posDb){
-  bool sendNext = true;
+  //bool sendNext = true;
 
   if (!posDb.hasPositionElements()){
     return;
   }
   SerialMon.print("Connecting to APN: ");
   SerialMon.print(apn);
+  bool sendNext = false;
   if (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
     SerialMon.println(" fail");
   }
-  else {
+  else
+  {
     SerialMon.println(" OK");
-    
-    SerialMon.print("Connecting to ");
-    SerialMon.print(server);
-    if (!client.connect(server, port)) {
-      SerialMon.println(" fail");
-    }
-    else {
-      SerialMon.println(" OK");
-      SerialMon.println(millis());
-    
+    while(posDb.hasPositionElements())
+    {
+      SerialMon.println("Connecting to: " + String(server));
+      if (sendNext == false)
+      {
+        SerialMon.println("Reconnect required");
+        if (!client.connect(server, port)) {
+          SerialMon.println(" fail");
+          break;
+        }
+      }
+
+      sendNext=false;
       // Making an HTTP GET request
       SerialMon.println("Performing HTTP GET request...");
       String httpRequestData = "GET https://api.thingspeak.com/update.json?api_key=9N13CC4IWEVHIBLL";
+
+      SerialMon.println("---===Data to be sent:===---");
+      SerialMon.println("Number of elements is DB: " + String(posDb.getSize()));
+      auto posElem = posDb.consumeNewestElement();
+
+      SerialMon.println("Latitude: " + String(posElem.latitude,6) + " Longitude: " + String(posElem.longitude,6));
+      SerialMon.println("Altitude: " + String(posElem.altitude,6) + "m Battery Voltage: " + String(posElem.batteryVoltage,2) + " v");
+      SerialMon.println("Barometric Altitude: " + String(posElem.barometricAltitude,2) + "m Temperature: " + String(posElem.temperature,2) + " C");
+      SerialMon.println("Signal Strength: " + String(modem.getSignalQuality()) + " dB Timestamp: " + String(posElem.timestamp));
+      SerialMon.println("-----===End of data===------");
       
-      while(posDb.hasPositionElements() && sendNext)
+      client.print(httpRequestData);
+      client.print("&field1=" + String(posElem.barometricAltitude,2));
+      client.print("&field2=" + String(posElem.temperature,2));
+      client.print("&field3=" + String(posElem.signalStrength));
+      client.print("&field4=" + String(posElem.batteryVoltage,2));
+      client.print("&field5=" + String(posElem.latitude,6));
+      client.print("&field6=" + String(posElem.longitude,6));
+      client.print("&field7=" + String(posElem.altitude,6));
+      client.print("&field8=" + String(posElem.timestamp));
+      //client.print("&status=" + String("Splendid"));
+      client.println(String(" HTTP/1.0"));
+      client.println();
+      client.println();
+      client.println();
+      
+      unsigned long timeout = millis();
+      String httpResponse = "";
+      while (client.connected() && millis() - timeout < 2000L) 
       {
-        SerialMon.println("Number of elements is DB: " + String(posDb.getSize()));
-        sendNext = false;
-        auto posElem = posDb.consumeNewestElement();
-
-        SerialMon.println("Latitude: " + String(posElem.latitude,6) + " Longitude: " + String(posElem.longitude,6));
-        SerialMon.println("Altitude: " + String(posElem.altitude,6) + "m Battery Voltage: " + String(posElem.batteryVoltage,2) + " v");
-        SerialMon.println("Barometric Altitude: " + String(posElem.barometricAltitude,2) + "m Temperature: " + String(posElem.temperature,2) + " C");
-        SerialMon.println("Signal Strength: " + String(modem.getSignalQuality()) + " dB");
-        
-        client.print(httpRequestData);
-        client.print("&field1=" + String(posElem.barometricAltitude,2));
-        client.print("&field2=" + String(posElem.temperature,2));
-        client.print("&field3=" + String(posElem.signalStrength));
-        client.print("&field4=" + String(posElem.batteryVoltage,2));
-        client.print("&field5=" + String(posElem.latitude,6));
-        client.print("&field6=" + String(posElem.longitude,6));
-        client.print("&field7=" + String(posElem.altitude,6));
-        client.print("&field8=" + String(posElem.timestamp));
-        //client.print("&status=" + String("Splendid"));
-        client.println(String(" HTTP/1.0"));
-        client.println();
-        client.println();
-        client.println();
-        
-        unsigned long timeout = millis();
-        while (client.connected() && millis() - timeout < 2000L) 
+        // Print available data (HTTP response from server)
+        while (client.available()) 
         {
-          // Print available data (HTTP response from server)
-          while (client.available()) 
-          {
-            sendNext=true;
-            char c = client.read();
-            SerialMon.print(c);
-            timeout = millis();
-          }
+          sendNext=true;
+          httpResponse += (char)client.read();
+          timeout = millis();
         }
-                if(!sendNext) // we failed to send current value ( never got a response ), put back message in db
-        {
-          SerialMon.println("Failed to send position element...");
-          posDb.addPosition(std::move(posElem));
-        }
-        delay(4000);
       }
-      
-
-      SerialMon.println();
-    
-      // Close client and disconnect
-      client.stop();
-      SerialMon.println(F("Server disconnected"));
-      modem.gprsDisconnect();
-      SerialMon.println(F("GPRS disconnected"));
+      SerialMon.print(httpResponse);
+      if(!sendNext) // we failed to send current value ( never got a response ), put back message in db
+      {
+        SerialMon.println("Failed to send position element...");
+        posDb.addPosition(std::move(posElem));
+        client.stop();
+      }else {
+        SerialMon.println("Successfully sent position element");
+      }
+      delay(4000);
     }
+    SerialMon.println();
+  
+    // Close client and disconnect
+    client.stop();
+    SerialMon.println(F("Server disconnected"));
+    modem.gprsDisconnect();
+    SerialMon.println(F("GPRS disconnected"));
   }
 }
 
