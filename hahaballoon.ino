@@ -170,7 +170,7 @@ bool setPowerBoostKeepOn(int en){
   return I2CPower.endTransmission() == 0;
 }
 
-void sendGsmData(TinyGPSPlus &gps);
+void sendGsmData(TinyGPSPlus &gps, uint32_t &lastMessageSent);
 bool getBarometricData(float &barAltitude, float &temperature);
 
 void setup() {
@@ -229,30 +229,27 @@ void loop() {
   positionDb posDb;
   float barometricAltitude, temperature;
   bool runNext = true;
-  auto start = millis();
+  uint32_t lastMessageSent = 0, lastMessageSampled = 0;
   while(runNext)
   {
-    if (!getBarometricData(barometricAltitude, temperature))
+    if (lastMessageSampled < millis())
     {
-      barometricAltitude = NULL;
-      temperature = NULL;
+      if (!getBarometricData(barometricAltitude, temperature))
+      {
+        barometricAltitude = NULL;
+        temperature = NULL;
+      }
+      if(readGPS(gps))
+      {
+        extractGpsData(gps,posDb,barometricAltitude, temperature, (uint8_t)modem.getSignalQuality(), (float)((analogRead(BATTERY_VOLTAGE) * 7.45 ) / 4095));
+      }
+      else{
+        SerialMon.println("Gps Not available");
+      }
+      lastMessageSampled = millis() + 10000;
     }
-    if(readGPS(gps))
-    {
-      extractGpsData(gps,posDb,barometricAltitude, temperature, (uint8_t)modem.getSignalQuality(), (float)((analogRead(BATTERY_VOLTAGE) * 7.45 ) / 4095));
-    }
-    else{
-      SerialMon.println("Gps Not available");
-    }
-
-    //if(start + 000 < millis())
-    //{
-      //start = millis();
-      sendGsmData(posDb);
-    //}
-    //esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); // ESP32 wakes up every 30 seconds
+    sendGsmData(posDb, lastMessageSent);
     
-    delay(5000);
   }
 }
 
@@ -266,8 +263,7 @@ void extractGpsData(TinyGPSPlus& gps, positionDb& posDb, float& barometricAltitu
   
 }
 
-void sendGsmData(positionDb& posDb){
-  //bool sendNext = true;
+void sendGsmData(positionDb& posDb, uint32_t& lastMessageSent){
 
   if (!posDb.hasPositionElements()){
     return;
@@ -283,6 +279,11 @@ void sendGsmData(positionDb& posDb){
     SerialMon.println(" OK");
     while(posDb.hasPositionElements())
     {
+      while(lastMessageSent > millis())
+      {
+        SerialMon.println("waiting for 10s cooldown to send next message");
+        delay(500);
+      }
       SerialMon.println("Connecting to: " + String(server));
       if (sendNext == false)
       {
@@ -296,7 +297,7 @@ void sendGsmData(positionDb& posDb){
       sendNext=false;
       // Making an HTTP GET request
       SerialMon.println("Performing HTTP GET request...");
-      String httpRequestData = "GET https://api.thingspeak.com/update.json?api_key=9N13CC4IWEVHIBLL";
+      String httpRequestData = "/update.json?api_key=9N13CC4IWEVHIBLL";
 
       SerialMon.println("---===Data to be sent:===---");
       SerialMon.println("Number of elements is DB: " + String(posDb.getSize()));
@@ -307,7 +308,8 @@ void sendGsmData(positionDb& posDb){
       SerialMon.println("Barometric Altitude: " + String(posElem.barometricAltitude,2) + "m Temperature: " + String(posElem.temperature,2) + " C");
       SerialMon.println("Signal Strength: " + String(modem.getSignalQuality()) + " dB Timestamp: " + String(posElem.timestamp));
       SerialMon.println("-----===End of data===------");
-      
+
+      client.print(String("GET "));
       client.print(httpRequestData);
       client.print("&field1=" + String(posElem.barometricAltitude,2));
       client.print("&field2=" + String(posElem.temperature,2));
@@ -318,8 +320,8 @@ void sendGsmData(positionDb& posDb){
       client.print("&field7=" + String(posElem.altitude,6));
       client.print("&field8=" + String(posElem.timestamp));
       //client.print("&status=" + String("Splendid"));
-      client.println(String(" HTTP/1.0"));
-      client.println();
+      client.print(" Connection: keep-alive");
+      client.print(" HTTP/1.0");
       client.println();
       client.println();
       
@@ -343,8 +345,9 @@ void sendGsmData(positionDb& posDb){
         client.stop();
       }else {
         SerialMon.println("Successfully sent position element");
+        client.stop();
       }
-      delay(4000);
+      lastMessageSent = millis() + 10000;
     }
     SerialMon.println();
   
